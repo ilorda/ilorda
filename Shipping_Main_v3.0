@@ -1,0 +1,547 @@
+-- INFO FIRT MILE
+CREATE MULTISET VOLATILE TABLE FM, NO LOG AS (
+select 
+distinct SHP_LG_TR_RELATED_ENTITY_ID SHP_ID,
+r.SHP_COMPANY_ID,
+c.SHP_COMPANY_name CarrierFM,
+r.SHP_LG_DRIVER_ID DRIVER_IDFM,
+UPPER(shp_lg_driver_first_name) ||' '|| UPPER(shp_lg_driver_last_name) AS driverFM_full_name,
+m.semaforo semaforoDFM,
+SHP_LG_DRIVER_STATUS DRIVERFM_STATUS,
+r.SHP_LG_VEHICLE_ID VEHICLEFM_ID,
+r.SHP_LG_VEHICLE_PLATE_ID PATENTE_FM,
+SHP_LG_FACILITY_ID
+
+
+FROM WHOWNER.LK_SHP_LG_ROUTES AS r
+INNER JOIN WHOWNER.LK_SHP_LG_ROUTE_STOP as rs  ON r.shp_lg_route_id  = rs.shp_lg_route_id
+INNER JOIN WHOWNER.BT_SHP_LG_ORDER  as o   ON o.shp_lg_route_stop_id  = rs.shp_lg_stop_id
+INNER JOIN WHOWNER.LK_SHP_LG_ORDER_TU  as otu ON otu.shp_lg_order_id  = o.shp_lg_order_id
+INNER JOIN WHOWNER.LK_SHP_LG_TRANSPORT_UNIT as tu  ON otu.shp_lg_transport_unit_id = tu.shp_lg_transport_unit_id
+INNER JOIN WHOWNER.LK_SHP_COMPANIES  as C   ON C.SHP_company_ID = r.shp_company_ID
+INNER JOIN WHOWNER.LK_SHP_LG_DRIVERS as  d   ON d.SHP_LG_DRIVER_ID =r.SHP_LG_DRIVER_ID
+INNER JOIN LK_SHP_LG_VEHICLES as v   ON v.SHP_LG_VEHICLE_ID = r.SHP_LG_VEHICLE_ID
+INNER JOIN WHOWNER.LK_SHP_LG_VEHICLES_TYPES as vt ON vt.shp_lg_vehicle_type_id = v.shp_lg_vehicle_type_id
+INNER JOIN WHOWNER.LK_SHP_LG_CUSTOMER as cust on cust.shp_lg_cust_id=tu.SHP_LG_TR_CUSTOMER_ID
+left join SCORING.pf_me_drivers_fm_score m on r.shp_lg_driver_id=m.driver_id
+WHERE SHP_LG_TYPE = 'first_mile'
+and shp_lg_transport_unit_status in ('picked_up','delivered')
+and SHP_LG_ROUTE_STATUS in ('close')
+and shp_lg_tr_related_entity_type in 'shipment'
+and CAST(shp_lg_init_date as date) >= (ADD_MONTHS((CURRENT_DATE - EXTRACT(DAY FROM CURRENT_DATE)+1), -14))
+) with data primary index  (shp_id) on commit preserve rows;
+
+-- VOLATIL A NIVEL SHP DESDE LA TMS INGRESO
+CREATE MULTISET VOLATILE TABLE shps_colecta_tms, NO LOG AS (
+select
+shp_shipment_id shp_id_tms,
+oreplace(oreplace(oreplace(tms_tr_inb_truck_id,'-',''),'_',''),'.','') truck_inbound_tms,
+cast(tms_tr_inb_include_at as date format 'mm-dd-yyyy') in_hub_date_tms
+from WHOWNER.BT_TMS_TRACKING 
+where 1=1
+and in_hub_date_tms > (current_Date -461)
+ )WITH DATA PRIMARY INDEX (shp_id_tms) ON COMMIT PRESERVE ROWS;
+
+-- VOLATIL A NIVEL SHP DESDE LA TMS SALIDA
+ CREATE MULTISET VOLATILE TABLE SHPS_DIS_TMS, NO LOG AS (
+select
+a.shp_shipment_id SHP_ID,
+cast(tmS_tr_shipped_date as date format 'mm-dd-yyyy') FECHA_SHIPPED_TMS, 
+TMS_TR_SHIPPED_USER USUARIO_SHIPPED_TMS,
+TMS_TR_LOGISTIC_CENTER_ID,
+UPPER(REGEXP_REPLACE(tms_tr_dis_truck_id,'([-._,~:/$<>[()$%&*#"`{}]?)','',1,0,'c')) TRUCK_DIS_STD,
+cast(tms_tr_dis_include_at as date format 'mm-dd-yyyy') FECHA_DESPACHO,
+tms_tr_dis_dock_id DOCK_DESPACHO,
+shp_dispatch_id NUMERO_DESPACHO,
+shp_label_carrier_name CARRIER_NAME_MM_TMS
+
+from WHOWNER.BT_TMS_TRACKING a
+WHERE 1=1 
+AND CAST(FECHA_DESPACHO as date) > (current_date -461)
+)WITH DATA PRIMARY INDEX (shp_id) ON COMMIT PRESERVE ROWS;
+
+-- INFO LAST MILE
+CREATE MULTISET VOLATILE TABLE LM, NO LOG AS (
+select 
+distinct SHP_LG_TR_RELATED_ENTITY_ID SHP_ID,
+r.SHP_COMPANY_ID,
+c.SHP_COMPANY_name CarrierLM,
+r.SHP_LG_DRIVER_ID DRIVER_IDLM,
+UPPER(shp_lg_driver_first_name) ||' '|| UPPER(shp_lg_driver_last_name) AS driverLM_full_name,
+m.semaforo semaforoDLM,
+SHP_LG_DRIVER_STATUS DRIVERLM_STATUS,
+r.SHP_LG_VEHICLE_ID VEHICLELM_ID,
+r.SHP_LG_VEHICLE_PLATE_ID PATENTE_LM
+
+
+FROM WHOWNER.LK_SHP_LG_ROUTES AS r
+INNER JOIN WHOWNER.LK_SHP_LG_ROUTE_STOP as rs  ON r.shp_lg_route_id  = rs.shp_lg_route_id
+INNER JOIN WHOWNER.BT_SHP_LG_ORDER  as o   ON o.shp_lg_route_stop_id  = rs.shp_lg_stop_id
+INNER JOIN WHOWNER.LK_SHP_LG_ORDER_TU  as otu ON otu.shp_lg_order_id  = o.shp_lg_order_id
+INNER JOIN WHOWNER.LK_SHP_LG_TRANSPORT_UNIT as tu  ON otu.shp_lg_transport_unit_id = tu.shp_lg_transport_unit_id
+INNER JOIN WHOWNER.LK_SHP_COMPANIES  as C   ON C.SHP_company_ID = r.shp_company_ID
+INNER JOIN WHOWNER.LK_SHP_LG_DRIVERS as  d   ON d.SHP_LG_DRIVER_ID =r.SHP_LG_DRIVER_ID
+INNER JOIN LK_SHP_LG_VEHICLES as v   ON v.SHP_LG_VEHICLE_ID = r.SHP_LG_VEHICLE_ID
+INNER JOIN WHOWNER.LK_SHP_LG_VEHICLES_TYPES as vt ON vt.shp_lg_vehicle_type_id = v.shp_lg_vehicle_type_id
+INNER JOIN WHOWNER.LK_SHP_LG_CUSTOMER as cust on cust.shp_lg_cust_id=tu.SHP_LG_TR_CUSTOMER_ID
+left join SCORING.pf_me_drivers_lg_score m on r.shp_lg_driver_id=m.driver_id
+
+WHERE SHP_LG_TYPE = 'last_mile'
+and shp_lg_transport_unit_status in ('picked_up','delivered')
+and SHP_LG_ROUTE_STATUS in ('close')
+and shp_lg_tr_related_entity_type in 'shipment'
+and CAST(shp_lg_init_date as date) >= (ADD_MONTHS((CURRENT_DATE - EXTRACT(DAY FROM CURRENT_DATE)+1), -14))
+) with data primary index  (shp_id) on commit preserve rows;
+
+-- RESPONSABILIDAD DEMORA
+CREATE MULTISET VOLATILE TABLE DEMORA, NO LOG AS (
+SELECT 
+DISTINCT(SHP_ID) AS SHP_ID,
+responsabilidad,
+actor_responsable,
+tipo_demora
+FROM scoring.pf_me_responsabilidad_demoras
+) with data primary index  (shp_id) on commit preserve rows;
+
+
+-- RESPONSABILIDAD AGENCIA_DO
+CREATE MULTISET VOLATILE TABLE AGENCIA_DO, NO LOG AS (
+SELECT 
+N.shp_id,
+N.shp_Carrier_id,
+N.shp_agency_id AGENCIA_DOID,
+U.carrier_name carrier_name_agdo,
+U.descripcion AGENCIA_DO,
+U.tipo_operacion_agencia tipo_operacion_agencia,
+U.type_agencia tipo_agencia_DO,
+U.SEMAFORO AS SEMAFORO_DO
+
+FROM
+WHOWNER.BT_SHP_ELASTICSEARCH_CHECKPOINTS N   
+LEFT JOIN scoring.pf_me_agencias_hibridas U ON concat(concat(concat(concat(N.shp_agency_id,'|'),trim(cast(N.shp_Carrier_id as CHAR(30)))),'|'),N.shp_site_id)=U.id_agencia 
+WHERE N.shp_sub_status = 'dropped_off' 
+-- and tipo_operacion_agencia=
+ -- or N.shp_status in ('ready_to_ship') and N.shp_tracking_code in ('PL-0201','PL0201'))
+AND CAST(N.shp_checkpoint_date as date) > (current_date -461)
+QUALIFY ROW_NUMBER() OVER(PARTITION BY N.shp_id ORDER BY N.shp_checkpoint_date desc)=1
+) with data primary index  (shp_id) on commit preserve rows;
+
+-- RESPONSABILIDAD AGENCIA_PU
+CREATE MULTISET VOLATILE TABLE AGENCIA_PU, NO LOG AS (
+SELECT 
+G.shp_id,
+G.shp_agency_id AGENCIA_PUID,
+k.descripcion AGENCIA_PU,
+k.carrier_name carrier_name_agpu,
+k.tipo_operacion_agencia tipo_operacion_agencia,
+k.type_agencia tipo_agencia_pu,
+k.SEMAFORO AS SEMAFORO_PU
+
+from WHOWNER.BT_SHP_ELASTICSEARCH_CHECKPOINTS g  
+LEFT JOIN SCORING.pf_me_agencias_hibridas K ON K.id_agencia=concat(concat(concat(concat(g.shp_agency_id,'|'),trim(cast(g.shp_Carrier_id as CHAR(30)))),'|'),g.shp_site_id)
+WHERE (g.shp_sub_status = 'waiting_for_withdrawal' and g.shp_tracking_code in ('0215','0217','PL0201','PL-0201')
+      or g.shp_status in ('shipped') and g.shp_tracking_code in ('PL-0201','PL0201'))
+AND CAST(G.shp_checkpoint_date as date) > (current_date -461)
+QUALIFY ROW_NUMBER() OVER(PARTITION BY G.shp_id ORDER BY G.shp_checkpoint_date desc)=1
+) with data primary index  (shp_id) on commit preserve rows;
+
+-- FRAUD MAIN
+CREATE MULTISET VOLATILE TABLE INFO_FRAUDM, NO LOG AS (
+SELECT 
+       a.shp_shipment_id,
+(case when a.has_pf_empty_box = 1 then 'Empty box' 
+when a.has_pf_pnr_c_neto = 1 then 'PNR Contradictorio' 
+when a.has_pf_pnr_c_bruto = 1 and a.pnr_c_me_solved = 1 then 'PNR Contradictorio Rectificado'
+when a.has_pf_pnr_c_bruto = 1 then 'PNR Contradictorio Otros'
+else 'Otra' end) CAUSA_RECLAMO,
+a.new_user_buy,
+a.new_user_sel,
+a.first_order_buy,
+a.first_order_sel,
+a.id_carrito,
+a.tipo_fraude,
+       case when sum(has_pf_empty_box)>1 then 1 else sum(has_pf_empty_box) end casos_EB,
+       case when sum(has_pf_pnr_c_neto)>1 then 1 else sum(has_pf_pnr_c_neto) end casos_PNRN,
+       case when sum(has_pf_pnr_c_bruto)>1 then 1 else sum(has_pf_pnr_c_bruto) end casos_PNRB,
+       case when sum(has_pf_extravio)>1 then 1 else sum(has_pf_extravio) end casos_E,
+sum (a.gmv_usd) gmv_usd,
+-- sum (a.gmv_usd_ccl) gmv_usd_ccl,
+SUM (a.bpp_cashout_bonif + a.bpp_cashout_fixed) bpp_co_total,
+SUM (CASE WHEN a.tipo_fraude in ('carrier_empty_box','carrier_pnr_c') then a.bpp_cashout_bonif + a.bpp_cashout_fixed else 0 end) bpp_co_usd_fraude,
+count (a.ord_order_id) orders,
+SUM (CASE WHEN a.tipo_fraude in ('carrier_empty_box','carrier_pnr_c') then 1 else 0 end) orders_fraude,
+SUM (CASE WHEN a.tipo_fraude in ('carrier_empty_box','carrier_pnr_c') and bpp_cashout_fixed + bpp_cashout_bonif > 0 then 1 else 0 end) orders_fraude_con_co
+
+FROM scoring.fraud_main a
+
+WHERE 1=1
+AND a.shp_shipping_mode_id = 'me2'
+and a.shp_shipment_id is not null
+and CAST(a.tim_day_winning_date as date) > (current_date -461)
+
+group by 1,2,3,4,5,6,7,8
+QUALIFY ROW_NUMBER() OVER(PARTITION BY shp_shipment_id ORDER BY bpp_co_usd_fraude desc)=1
+) with data primary index  (shp_shipment_id) on commit preserve rows;
+
+-- Marca EB
+CREATE MULTISET VOLATILE TABLE marcaEB, NO LOG AS (
+select
+b.shp_shipment_id,
+case when sum(flag_empty_box_pf)>1 then 1 else sum(flag_empty_box_pf) end as  flag_empty_box_pf
+from SCORING.mercado_envios_empty_box a
+left join WHOWNER.BT_BIDS b on b.ord_order_id=a.ord_order_id and photo_id='TODATE'
+where tim_day_winning_date > (current_date -461)
+group by b.shp_shipment_id
+) with data primary index  (shp_shipment_id) on commit preserve rows;
+
+
+
+-- TABLA VERSION1
+create multiset volatile table Shipping_MainPRE1, no log as(
+select 
+a.shp_shipment_id,
+a.shp_tracking_number_id,
+a.sit_site_id,
+a.shp_date_created_id,
+a.shp_date_shipped_id,
+a.shp_date_delivered_id,
+a.shp_status_id,
+a.SHP_SUBSTATUS_ID,
+a.shp_sender_id,
+a.shp_receiver_id,
+a.shp_contact,
+a.shp_phone,
+(case when a.shp_service_id in (331,721,741,1091,462,911,731) then 'CBT'  
+when (a.SHP_PICKING_TYPE_ID in ('cross_docking') AND AGENCIA_DO.AGENCIA_DOID IS NOT NULL) then 'XD SDO'
+when (a.SHP_PICKING_TYPE_ID in ('cross_docking') AND AGENCIA_DO.AGENCIA_DOID IS NULL) then 'XD'
+when a.SHP_PICKING_TYPE_ID in ('xd_drop_off') then 'XD DO'
+when a.SHP_PICKING_TYPE_ID in ('drop_off','drop_shipping') then 'DS'
+when a.SHP_PICKING_TYPE_ID = 'fulfillment' then 'FBM'
+when a.SHP_PICKING_TYPE_ID = 'self_service' then 'FLEX'
+else 'OTROS' end) as PICKING_TYPE,
+A.shp_type,
+f.shp_add_state_name as shp_add_state_name_sender,
+f.shp_add_address_line as shp_add_address_line_sender,
+f.shp_add_city_name as shp_add_city_name_sender,
+f.shp_add_neighborhood_name as shp_add_neighborhood_name_sender,
+f.shp_add_latitude as shp_add_latitude_sender,
+f.shp_add_longitude as shp_add_longitude_sender,
+f.shp_add_geolocation_type as calidad_coordenada_sender,
+f.shp_add_zip_code as shp_add_zip_code_sender,
+m.new_user_sel,
+m.first_order_sel,
+e.shp_add_state_name as shp_add_state_name_receiver,
+e.shp_add_address_line as shp_add_address_line_receiver,
+e.shp_add_city_name as shp_add_city_name_receiver,
+e.shp_add_neighborhood_name as shp_add_neighborhood_name_receiver,
+e.shp_add_latitude as shp_add_latitude_receiver,
+e.shp_add_longitude as shp_add_longitude_receiver,
+e.shp_add_geolocation_type as calidad_coordenada_receiver,
+e.shp_add_zip_code as shp_add_zip_code_receiver,
+M.new_user_buy,
+m.first_order_buy,
+m.id_carrito,
+m.tipo_fraude,
+M.causa_reclamo,
+case when AGENCIA_DO.carrier_name_agdo= 'OCASA' THEN 'Pickit' else AGENCIA_DO.carrier_name_agdo end AS CARRIER_AGENCIA_DO,
+AGENCIA_DO.AGENCIA_DOID AGENCIA_DOID,
+AGENCIA_DO.AGENCIA_DO DESCRIPCION_AGENCIA_DO,
+AGENCIA_DO.tipo_agencia_DO tipo_agencia_DO,
+AGENCIA_DO.tipo_operacion_agencia tipo_operacion_agencia_DO,
+AGENCIA_DO.SEMAFORO_DO AS SEMAFORO_DO,
+fm.CarrierFM,
+fm.DRIVER_IDFM,
+fm.driverFM_full_name,
+fm.semaforoDFM,
+fm.DRIVERFM_STATUS,
+fm.VEHICLEFM_ID,
+fm.PATENTE_FM,
+b.truck_inbound_tms patente_IngresoHUB,
+b.in_hub_date_tms fecha_IngresoHUB,
+c.FECHA_SHIPPED_TMS fecha_SalidaHUB,
+c.USUARIO_SHIPPED_TMS Usuario_SalidaHUB,
+a.shp_logistic_center_id,
+c.TRUCK_DIS_STD patente_SalidaHUB,
+c.FECHA_DESPACHO fecha_DespachoHUB,
+c.DOCK_DESPACHO,
+c.NUMERO_DESPACHO,
+c.CARRIER_NAME_MM_TMS CarrierMM,
+case 
+  WHEN a.shp_service_id in (721,731,1091,462) then 'MailAmericas'
+  WHEN A.shp_service_id in (182441) then 'Wish'
+  WHEN a.shp_service_id in (331) then 'DHL CBT MEXICO'
+  WHEN a.shp_service_id in (162835) then 'Sinostar'
+  WHEN a.SHP_SERVICE_ID = 801 THEN 'PICKIT'
+  when d.shp_carrier_id_ajus = 'MOTONORTE' then 'WEBPACK' 
+  WHEN d.shp_carrier_id_ajus IN ('MERCADO ENVIOS','MERCADOENVIOS','REPROCESOS CARRITO','MELI LOGISTICS') then 'LOGISTICS'
+  else d.shp_carrier_id_ajus 
+  end Carrier_LM,
+lm.DRIVER_IDLM,
+lm.driverLM_full_name,
+lm.semaforoDLM,
+lm.DRIVERLM_STATUS,
+lm.VEHICLELM_ID,
+lm.PATENTE_LM,
+a.shp_deliver_to,
+case when AGENCIA_PU.carrier_name_agpu= 'OCASA' THEN 'Pickit' else AGENCIA_PU.carrier_name_agpu end AS CARRIER_AGENCIA_PU,
+AGENCIA_PU.AGENCIA_PUID AGENCIA_PUID,
+AGENCIA_PU.AGENCIA_PU DESCRIPCION_AGENCIA_PU,
+AGENCIA_PU.tipo_agencia_pu tipo_agencia_PU,
+AGENCIA_PU.tipo_operacion_agencia tipo_operacion_agencia_PU,
+AGENCIA_PU.SEMAFORO_PU AS SEMAFORO_PU,
+J.tipo_demora,
+J.responsabilidad,
+J.actor_responsable,
+zeroifnull(k.flag_empty_box_pf) flag_empty_box_pf,
+A.shp_order_cost,
+A.shp_order_cost_usd,
+M.casos_EB,
+M.casos_PNRN,
+M.casos_PNRB,
+M.casos_E,
+M.gmv_usd,
+-- M.gmv_usd_ccl,
+M.bpp_co_total,
+M.bpp_co_usd_fraude,
+M.orders,
+M.orders_fraude,
+M.orders_fraude_con_co,
+flag_stolen_carrier,
+flag_lost_carrier,
+flag_delivered_carrier,
+sum_delivered_carrier,
+flag_damaged_carrier,
+flag_destroyed_carrier,
+flag_retained_carrier,
+flag_return_carrier,
+flag_not_localized_carrier,
+flag_0617_sbo,
+flag_0619_sbo,
+flag_0623_sbo,
+flag_retained_sbo,
+flag_gestion_operativa,
+flag_stolen_NO_carrier,
+flag_lost_NO_carrier,
+flag_damaged_NO_carrier,
+flag_delivered_MELI,
+flag_407_MELI,
+flag_stolen_MELI,
+flag_lost_MELI,
+flag_damaged_MELI,
+flag_destroyed_MELI,
+flag_0401,
+flag_delivered,
+flag_stale,
+flag_delayed,
+flag_return,
+flag_cancelled,
+flag_0401_sgo,
+flag_0401_sbo,
+flag_delivered_no_action_taken,
+rts_picked_up,
+rts_in_hub,
+flag_delivered_cbt_carrier,
+flag_receiver_absent,flag_bad_address,
+current_date as Fecha_ultima_act
+
+FROM whowner.bt_shp_shipments a
+left join WHOWNER.LK_SHP_SHIPPING_SERVICES D ON a.SHP_SERVICE_ID = D.shp_service_id
+LEFT JOIN AGENCIA_DO ON AGENCIA_DO.shp_id=a.shp_shipment_id
+left join FM on fm.SHP_ID=a.shp_shipment_id
+left join LM on lm.SHP_ID=a.shp_shipment_id
+left join shps_colecta_tms b on b.shp_id_tms=a.shp_shipment_id
+left join SHPS_DIS_TMS c on c.SHP_ID=a.shp_shipment_id
+LEFT JOIN whowner.lk_shp_address f ON a.shp_sender_address = f.shp_add_id
+LEFT JOIN whowner.lk_shp_address e ON a.shp_receiver_address = e.shp_add_id
+LEFT JOIN AGENCIA_PU ON AGENCIA_PU.shp_id=A.shp_shipment_id
+LEFT JOIN  SCORING.checkpoints I ON I.SHP_ID=a.shp_shipment_id
+LEFT JOIN DEMORA J ON J.SHP_ID=a.shp_shipment_id
+LEFT JOIN marcaEB K ON K.shp_shipment_id=a.shp_shipment_id
+LEFT JOIN INFO_FRAUDM M ON M.SHP_shipment_id=a.shp_shipment_id
+
+
+where 1=1
+and a.shp_shipping_mode_id = 'me2'
+and CAST(shp_date_created_id as date) >= (ADD_MONTHS((CURRENT_DATE - EXTRACT(DAY FROM CURRENT_DATE)+1), -13))
+) with data primary index  (shp_shipment_id) on commit preserve rows;
+
+drop table FM;
+drop table shps_colecta_tms;
+drop table LM;
+drop table SHPS_DIS_TMS;
+drop table AGENCIA_DO;
+drop table AGENCIA_PU;
+drop table DEMORA;
+drop table INFO_FRAUDM;
+drop table marcaEB;
+
+-- RESPONSABILIDAD EXTRAVIOS
+CREATE MULTISET VOLATILE TABLE EXTRAVIO, NO LOG AS (
+SELECT 
+DISTINCT(SHP_SHIPMENT_ID) AS SHP_ID,
+has_pf_extravio,
+Sub_casuistica_extravio,
+case when Tramo_extravio='PREVIO CADENA LOGISTICA' then 'PREVIO CADENA LOGISTICA' 
+     when tramo_extravio='CANCELADO' THEN 'CANCELADO' else Culpabilidad_extravio end as Culpabilidad_extravio,
+Tramo_extravio
+FROM  SCORING.pf_me_responsable_extravio_orders 
+QUALIFY ROW_NUMBER() OVER(PARTITION BY shp_id ORDER BY bpp_co desc)=1
+) with data primary index  (shp_id) on commit preserve rows;
+
+-- KYC
+ create multiset volatile table kyc, no log as
+ (SELECT
+ a.cus_cust_id,
+ min(kyc_completed_date) Fecha_completo_kyc,
+ MAX(a.kyc_completed_level) AS kyc_completed_level
+ FROM WHOWNER.BT_MP_KYC_LEVEL a
+ WHERE a.kyc_expiration_date IS NULL
+ GROUP BY 1)
+ with data primary index (cus_cust_id) on commit preserve rows;
+
+create multiset volatile table customers_data, no log as (
+  select A.cus_cust_id, 
+    cus_nickname,
+    cus_cust_status, 
+    cus_cust_verif_id,
+    cns_concesionario_flag,
+    Fecha_completo_kyc,
+    kyc_completed_level,
+    (case when cus_ru_since_dt is null and cus_ru_since_dt_mp is not null then cus_ru_since_dt_mp
+      when cus_ru_since_dt is not null and cus_ru_since_dt_mp is null then cus_ru_since_dt
+      when cus_ru_since_dt <= cus_ru_since_dt_mp then cus_ru_since_dt
+      when cus_ru_since_dt >= cus_ru_since_dt_mp then cus_ru_since_dt_mp
+      else null end) as cus_ru_fixed
+  from WHOWNER.LK_CUS_CUSTOMERS_DATA A
+    inner join (select distinct 
+      shp_receiver_id as cus_cust_id 
+      from Shipping_MainPRE1 
+      union 
+      select distinct shp_sender_id 
+      from Shipping_MainPRE1 as cus_cust_id) B on A.cus_cust_id = B.cus_cust_id
+left join kyc on kyc.cus_cust_id=a.cus_cust_id
+) with data primary index(cus_cust_id) on commit preserve rows;
+
+CREATE MULTISET VOLATILE TABLE SC1, NO LOG AS (
+select * 
+from WHOWNER.LK_SHP_SHIPPING_STEPS  
+where 1=1
+and shp_step_type in ('middle_mile')
+and shp_Step_status not in ('CANCELLED','PENDING') 
+and shp_tracking_number_id IS NOT NULL
+AND SHP_STEP_DATE_CREATED > (current_date -461)
+qualify 1=row_number()over(partition by shp_shipment_id,shp_step_number order by shp_step_date_created desc)
+) with data primary index  (shp_shipment_id,shp_step_number) on commit preserve rows;
+
+CREATE MULTISET VOLATILE TABLE SC2, NO LOG AS (
+SELECT
+shp_shipment_id,
+count(shp_shipment_id) SC_CHANGE
+FROM SC1
+group by 1
+) with data primary index  (shp_shipment_id) on commit preserve rows;
+
+CREATE MULTISET VOLATILE TABLE SCF, NO LOG AS (
+SELECT 
+SC1.shp_shipment_id,
+shp_step_origin_id,
+shp_step_destination_id,
+SC2.SC_CHANGE
+FROM SC1
+LEFT JOIN SC2 ON SC2.shp_shipment_id=SC1.shp_shipment_id
+qualify 1=row_number()over(partition by sc1.shp_shipment_id order by shp_step_number ASC)
+) with data primary index  (shp_shipment_id) on commit preserve rows;
+
+CREATE MULTISET VOLATILE TABLE SCF2, NO LOG AS (
+SELECT 
+SC1.shp_shipment_id,
+shp_step_destination_id
+FROM SC1
+qualify 2=row_number()over(partition by sc1.shp_shipment_id order by shp_step_number ASC)
+) with data primary index  (shp_shipment_id) on commit preserve rows;
+
+
+-- TABLA VERSION2
+create multiset volatile table Shipping_MainPRE2, no log as(
+SELECT A.*,
+B.has_pf_extravio,
+B.Sub_casuistica_extravio,
+B.Culpabilidad_extravio,
+B.Tramo_extravio,
+C.shp_step_origin_id OrigenMM,
+C.SC_CHANGE,
+C.shp_step_destination_id Primer_SC,
+D.shp_step_destination_id Segundo_SC,
+ f.cus_nickname nickname_buyer,
+ f.cus_cust_status status_buyer, 
+ f.cus_cust_verif_id verif_id_buyer,
+ f.Fecha_completo_kyc Fecha_completo_kyc_buyer,
+ f.kyc_completed_level kyc_completed_level_buyer,
+ g.cus_nickname nickname_seller,
+ g.cus_cust_status status_seller, 
+ g.cus_cust_verif_id verif_id_seller,
+ g.Fecha_completo_kyc Fecha_completo_kyc_seller,
+ g.kyc_completed_level kyc_completed_level_seller,
+ g.cns_concesionario_flag cns_concesionario_flag_seller
+
+FROM Shipping_MainPRE1 A
+LEFT JOIN EXTRAVIO B ON B.SHP_ID=A.SHP_SHIPMENT_ID
+LEFT JOIN SCF C ON C.shp_shipment_id=A.shp_shipment_id
+LEFT JOIN SCF2 D ON D.shp_shipment_id=A.shp_shipment_id
+ left join customers_data f on f.cus_cust_id=a.shp_receiver_id
+ left join customers_data g on g.cus_cust_id=a.shp_sender_id
+
+) with data primary index  (shp_shipment_id) on commit preserve rows;
+
+drop table Shipping_MainPRE1;
+
+-- TABLA VERSION2
+
+CREATE MULTISET VOLATILE TABLE checkpoint_lg3, NO LOG AS (
+select
+shp_shipment_id,
+shp_lg_chk_loc_latitude,
+shp_lg_chk_loc_longitude
+from WHOWNER.BT_SHP_LG_SHIPMENT_CHECKPOINTS
+where 1=1
+and shp_lg_sub_status = 'delivered'
+qualify 1=row_number()over(partition by shp_shipment_id order by shp_lg_route_id desc)
+)WITH DATA PRIMARY INDEX (shp_shipment_id) ON COMMIT PRESERVE ROWS;
+
+
+create multiset volatile table Shipping_MainPRE3, no log as(
+SELECT
+a.*,
+6371* ACOS (SIN(RADIANS(a.shp_add_latitude_receiver)) * SIN(RADIANS(c.shp_lg_chk_loc_latitude)) + COS(RADIANS(a.shp_add_latitude_receiver)) * COS(RADIANS(c.shp_lg_chk_loc_latitude)) * COS(RADIANS(c.shp_lg_chk_loc_longitude) - RADIANS(a.shp_add_longitude_receiver))) as DISTANCE_KM_Notif_y_Addres,
+CASE WHEN h.FTDS=1 THEN 'Efectivo' when h.FTDS=0 then 'No Efectivo' else 'Retira en Sucursal' end Entrega1visita,
+ lyl_c.lyl_level_number loyalty_buy,
+ lyl_v.lyl_level_number loyalty_sel,
+ case when lyl_c.lyl_level_number in (5,6) and a.kyc_completed_level_buyer in ('kyc-level-5','kyc-level-6') then 1 else 0 end as trusted_buyer,
+ case when a.cns_concesionario_flag_seller in (5) or a.picking_type in ('FBM') then 1 else 0 end as trusted_seller,
+'3' as version
+ 
+FROM Shipping_MainPRE2 A
+ left join WHOWNER.BT_LYL_POINTS_SNAPSHOT lyl_c on a.shp_receiver_id=lyl_c.cus_cust_id and (CAST(A.shp_date_created_id As DATE)/100+190000)=lyl_c.tim_month_id 
+ left join WHOWNER.BT_LYL_POINTS_SNAPSHOT lyl_v on a.shp_sender_id=lyl_v.cus_cust_id and (CAST(A.shp_date_created_id As DATE)/100+190000)=lyl_v.tim_month_id
+ left join SHIPMENT.CARRIER_MANAGEMENT_DETAIL h on a.shp_shipment_id = h.shp_shipment_id
+ left join checkpoint_lg3 c on a.shp_shipment_id = c.shp_shipment_id
+) with data primary index  (shp_shipment_id) on commit preserve rows;
+
+
+drop table EXTRAVIO;
+drop table SC1;
+drop table SC2;
+drop table SCF;
+drop table SCF2;
+drop table kyc;
+drop table customers_data;
+drop table Shipping_MainPRE2;
+drop table checkpoint_lg3;
+
+drop table scoring.Shipping_Main;
+
+create table SCORING.SHIPPING_MAIN as
+(SELECT * FROM Shipping_MainPRE3)
+with data primary index(shp_shipment_id);
+
+drop table Shipping_MainPRE3;
