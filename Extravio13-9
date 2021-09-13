@@ -1,0 +1,167 @@
+--Volatil para ver los estados de checkpoint
+CREATE MULTISET VOLATILE TABLE estados_checkpoints, NO LOG AS (
+select a.shp_id,
+max(case when shp_status in ('ready_to_ship') and shp_sub_status in ('picked_up')  then 1 else 0 end) rts_picked_up, -- verdadero si se recolecto
+max(case when shp_status in ('ready_to_ship') and shp_sub_status in ('in_hub')  then 1 else 0 end) rts_in_hub,
+max(case when shp_status in ('ready_to_ship') and shp_sub_status in ('dropped_off')  then 1 else 0 end) rts_dropped_off, -- dropped off se da cuando el carrier recolecta en agencia
+max(case when shp_status in ('ready_to_ship') and shp_sub_status in ('delayed')  then 1 else 0 end) rts_delayed,
+max(case when shp_status in ('ready_to_ship') and shp_sub_status in ('claimed_me')  then 1 else 0 end) rts_claimed_me, 
+max(case when shp_status in ('ready_to_ship')  then 1 else 0 end) rts_ready_to_ship,
+max(case when shp_status in ('cancelled')  then 1 else 0 end) rts_cancelled,
+max(case when shp_sub_status in ('rejected_in_hub')  then 1 else 0 end) rts_rejected_in_hub,
+max(case when SHP_TRACKING_CODE in ('PL-0623')  then 1 else 0 end) perdido_place,
+max(case when SHP_TRACKING_CODE in ('PL-0621')  then 1 else 0 end) robado_place,
+max(case when SHP_TRACKING_CODE in ('PL-0619')  then 1 else 0 end) dañado_place,
+max(case when SHP_TRACKING_CODE in ('MM-0623','MM-0617','MM-0617','MM-0245','MM-0607','MM-0631')  then 1 else 0 end) notif_line_haul,
+max(case when SHP_TRACKING_CODE in ('FM-0623','FM-0617')  then 1 else 0 end) notif_FM,
+max(case when shp_status in ('shipped') and shp_origin  like '%carrier%'    then 1 else 0 end) shipped_carrier_push_pull,--SHIPPED CARRIER LM
+max(case when shp_status in ('shipped') and shp_origin in 'MELI' then 1 else 0 end) shipped_meli,
+max(case when shp_status in ('shipped') and shp_origin in 'shipping-gestion-operativ' then 1 else 0 end) shipped_sgo,
+max(case when shp_status in ('shipped') and shp_origin in 'shipping-back-office' then 1 else 0 end) shipped_sbo,
+max(case when shp_status in ('shipped') and shp_origin  not like '%carrier%' and shp_origin  not in ('shipping-gestion-operativ','shipping-back-office','MELI')  then 1 else 0 end) shipped_otro
+
+
+
+from WHOWNER.BT_SHP_ELASTICSEARCH_CHECKPOINTS a
+where 1=1
+AND CAST(shp_checkpoint_date as date) > (current_date -180)
+group by 1
+)WITH DATA PRIMARY INDEX (shp_id) ON COMMIT PRESERVE ROWS;
+
+
+
+--Volatil para quedarme con las agemcias de drop of (las notif mas vieja)
+CREATE MULTISET VOLATILE TABLE agencias, NO LOG AS (
+select shp_id, a.shp_carrier_id, a.shp_agency_id, b.shp_agen_acronym, b.shp_agen_desc
+from WHOWNER.BT_SHP_ELASTICSEARCH_CHECKPOINTS a
+inner join WHOWNER.LK_SHP_AGENCIES_API b on b.shp_carrier_id = a.shp_carrier_id and a.shp_agency_id = b.shp_agen_acronym
+where 1=1
+and shp_sub_status in 'dropped_off'
+-- and a.shp_agency_id not in '0'
+-- and a.shp_carrier_id not in '0'
+-- and a. shp_agency_id is not null
+-- and a.shp_carrier_id is not null
+and cast(shp_date_created as date) > (current_date -180)
+---agregar filtro picking type y que haya hecho drop off
+qualify 1=row_number()over(partition by shp_id order by  shp_date_created asc)
+
+)WITH DATA PRIMARY INDEX (shp_id) ON COMMIT PRESERVE ROWS;
+
+
+
+-- volatil apra quedarme con el driver o carrier  de colecta
+CREATE MULTISET VOLATILE TABLE carrier_fm, NO LOG AS (
+SELECT distinct SHP_LG_TR_RELATED_ENTITY_ID SHP_ID,
+r.SHP_COMPANY_ID,
+c.SHP_COMPANY_name,
+r.SHP_LG_DRIVER_ID ,
+SHP_LG_FACILITY_ID,
+SHP_LG_TR_CUSTOMER_ID,
+shp_lg_related_entity_type
+FROM WHOWNER.LK_SHP_LG_ROUTES AS r
+INNER JOIN WHOWNER.LK_SHP_LG_ROUTE_STOP as rs  ON r.shp_lg_route_id  = rs.shp_lg_route_id
+INNER JOIN WHOWNER.BT_SHP_LG_ORDER  as o   ON o.shp_lg_route_stop_id  = rs.shp_lg_stop_id
+INNER JOIN WHOWNER.LK_SHP_LG_ORDER_TU  as otu ON otu.shp_lg_order_id  = o.shp_lg_order_id
+INNER JOIN WHOWNER.LK_SHP_LG_TRANSPORT_UNIT as tu  ON otu.shp_lg_transport_unit_id = tu.shp_lg_transport_unit_id
+INNER JOIN WHOWNER.LK_SHP_COMPANIES  as C   ON C.SHP_company_ID = r.shp_company_ID
+INNER JOIN WHOWNER.LK_SHP_LG_DRIVERS as  d   ON d.SHP_LG_DRIVER_ID =r.SHP_LG_DRIVER_ID
+INNER JOIN LK_SHP_LG_VEHICLES as v   ON v.SHP_LG_VEHICLE_ID = r.SHP_LG_VEHICLE_ID
+INNER JOIN WHOWNER.LK_SHP_LG_VEHICLES_TYPES as vt ON vt.shp_lg_vehicle_type_id = v.shp_lg_vehicle_type_id
+INNER JOIN WHOWNER.LK_SHP_LG_CUSTOMER as cust on cust.shp_lg_cust_id=tu.SHP_LG_TR_CUSTOMER_ID
+WHERE SHP_LG_TYPE = 'first_mile'
+and shp_lg_transport_unit_status in ('picked_up','delivered')
+and SHP_LG_ROUTE_STATUS in ('close') 
+and shp_lg_tr_related_entity_type in ('shipment')
+AND CAST(shp_lg_init_date as date) > (current_date -180)
+)WITH DATA PRIMARY INDEX (shp_id) ON COMMIT PRESERVE ROWS;
+
+
+
+
+CREATE MULTISET VOLATILE TABLE tipo_extravio, NO LOG AS (																									
+
+select  a.ord_order_id,
+a.shp_shipment_id,
+a.sit_site_id,																									
+(CAST(shp_date_created_id AS INTEGER )+19000000)/100 as month_created, 
+--a.ord_order_id,																									
+case when b.causa_bpp in ('Extravio','Extravío Marketplace') then 1 else 0 end has_pf_extravio,			
+(Case when shp_carrier_id_ajus in('MERCADO ENVIOS','REPROCESOS CARRITO','MERCADOENVIOS','MELI LOGISTICS') and v.shp_shipment_id is not null then 'MELI Logistics' else shp_carrier_id_ajus end) CARRIER_ID, 
+causa_bpp,		
+a.shp_picking_type_id,
+dom_domain_id,
+vertical,
+case when flag_lost_carrier + flag_lost_MELI > 0 and flag_delivered_carrier = 0 and causa_bpp in ('Extravio', 'Extravío Marketplace') then 'Extravío núcleo: lost '																									
+when  flag_stolen_carrier + flag_stolen_MELI > 0 and flag_delivered_carrier = 0 and causa_bpp in ('Extravio', 'Extravío Marketplace') then 'Extravío núcleo: stolen '																									
+when flag_lost_carrier + flag_stolen_carrier = 0 and flag_damaged_carrier + flag_damaged_MELI + flag_destroyed_MELI> 0 and flag_delivered_carrier  = 0 and causa_bpp in ('Extravio', 'Extravío Marketplace') then 'Dañado'																									
+when flag_lost_carrier + flag_stolen_carrier + flag_damaged_carrier  > 0 and flag_delivered_carrier  > 0 and causa_bpp in ('Extravio', 'Extravío Marketplace') then 'Extravío con delivered'																									
+when flag_lost_carrier + flag_stolen_carrier = 0 and   flag_return > 0 and causa_bpp in ('Extravio', 'Extravío Marketplace') then 'Extravio Returns'										
+when flag_lost_carrier + flag_stolen_carrier = 0 and  flag_retained_carrier  > 0 and causa_bpp in ('Extravio', 'Extravío Marketplace') then 'Extravio Retained'										
+
+when flag_0617_sbo + flag_0619_sbo + flag_0623_sbo  + flag_retained_sbo > 0 and causa_bpp in ('Extravio', 'Extravío Marketplace') then 'Extravio SBO'																	
+when flag_gestion_operativa > 0 and causa_bpp in ('Extravio', 'Extravío Marketplace') then 'Extravio gestion operativa'	
+when rts_cancelled > 0 and causa_bpp in ('Extravio', 'Extravío Marketplace') then 'Cancelado'	
+when causa_bpp in ('Extravio', 'Extravío Marketplace') then 'Extravío Otros'																									
+ELSE 'No extravio' END as sub_casuistica_extravio,		
+g.rts_picked_up,
+g.rts_in_hub,
+g.rts_dropped_off,
+g.rts_cancelled,
+g.rts_rejected_in_hub,
+case when a.shp_date_shipped_id is not null then 1 else 0 end shippeado, --CAMBIARLO A SHIPPEADO CARRIER Y SHIPPEADO MELI
+case when causa_bpp in ('Extravio', 'Extravío Marketplace') and shippeado = 1 then shp_carrier_id_ajus 
+when  causa_bpp in ('Extravio', 'Extravío Marketplace') and shippeado= 0 and a.shp_picking_type_id in ('cross_docking','xd_drop_off') and g.rts_picked_up = 1 and  g.rts_in_hub + g.rts_rejected_in_hub > 0  then SHP_LOGISTIC_CENTER_ID -- se colecto e hizo in hub 
+when causa_bpp in ('Extravio', 'Extravío Marketplace') and shippeado= 0 and a.shp_picking_type_id in ('fulfillment') and  rts_cancelled= 1  then SHP_LOGISTIC_CENTER_ID -- es fullfilment y no se cancelado quedo en el hub
+when causa_bpp in ('Extravio', 'Extravío Marketplace') and shippeado= 0 and a.shp_picking_type_id in ('cross_docking','xd_drop_off') and g.rts_picked_up = 0 and g.rts_in_hub + g.rts_rejected_in_hub > 0  then SHP_LOGISTIC_CENTER_ID -- no aparece como recolectado pero hizo in hub
+when causa_bpp in ('Extravio', 'Extravío Marketplace') and (shippeado= 0 and a.shp_picking_type_id in ('cross_docking','xd_drop_off') and g.rts_picked_up = 0 and  g.rts_dropped_off = 1 and  g.rts_in_hub + g.rts_rejected_in_hub < 1 )  then z.shp_agen_desc
+WHEN causa_bpp in ('Extravio', 'Extravío Marketplace') and dañado_place +robado_place + perdido_place > 0 then z.shp_agen_desc  -- culpabilidad agencia (el carrier de la agencia)
+when causa_bpp in ('Extravio', 'Extravío Marketplace') and shippeado= 0 and a.shp_picking_type_id in ('cross_docking','xd_drop_off') and g.rts_picked_up = 1 and  g.rts_in_hub + g.rts_rejected_in_hub < 1  then UPPER(y.SHP_COMPANY_name) -- culpabilidad driver first mile
+when causa_bpp in ('Extravio', 'Extravío Marketplace') AND  rts_ready_to_ship = 1 and g.rts_picked_up = 0 and  g.rts_in_hub + g.rts_rejected_in_hub < 1 and shippeado = 0 then  'SELLER' -- (Ver de agregar responsabilidad a First mile)
+when causa_bpp in ('Extravio', 'Extravío Marketplace') and  NOTIF_LINE_HAUL =1 THEN 'PATENTE LINE HAUL'
+when causa_bpp in ('Extravio', 'Extravío Marketplace') AND NOTIF_FM =1 THEN UPPER(y.SHP_COMPANY_name )
+else 'otro' end culpabilidad_extravio,
+
+case when causa_bpp in ('Extravio', 'Extravío Marketplace') and shippeado = 1 then 'LAST MILE' 
+when causa_bpp in ('Extravio', 'Extravío Marketplace') and ((shippeado= 0 and a.shp_picking_type_id in ('cross_docking','xd_drop_off') and g.rts_picked_up = 1 and  g.rts_in_hub + g.rts_rejected_in_hub >0) OR(shippeado= 0 and a.shp_picking_type_id in ('fulfillment') and  rts_cancelled= 1) OR(shippeado= 0 and a.shp_picking_type_id in ('cross_docking','xd_drop_off') and g.rts_picked_up = 0 and   g.rts_in_hub + g.rts_rejected_in_hub >0)) then 'DENTRO DEL HUB'
+when causa_bpp in ('Extravio', 'Extravío Marketplace') and shippeado= 0 and a.shp_picking_type_id in ('cross_docking','xd_drop_off') and g.rts_picked_up = 0 and  g.rts_dropped_off = 1 and  g.rts_in_hub + g.rts_rejected_in_hub <1 then 'DRIVER FM - AGENCIA XD DROP OFF'
+when causa_bpp in ('Extravio', 'Extravío Marketplace') and  shippeado= 0 and a.shp_picking_type_id in ('cross_docking','xd_drop_off') and g.rts_picked_up = 1 and g.rts_in_hub + g.rts_rejected_in_hub <1 then 'DRIVER FM'
+when causa_bpp in ('Extravio', 'Extravío Marketplace') and rts_cancelled = 1 then 'CANCELADO' 
+when causa_bpp in ('Extravio', 'Extravío Marketplace') AND NOTIF_LINE_HAUL =1 THEN 'LINE HAUL'
+when causa_bpp in ('Extravio', 'Extravío Marketplace') AND NOTIF_FM =1 THEN 'DRIVER FM'
+when causa_bpp in ('Extravio', 'Extravío Marketplace') AND  rts_ready_to_ship = 1 and g.rts_picked_up = 0 and  g.rts_in_hub + g.rts_rejected_in_hub <1 and shippeado = 0 then 'PREVIO CADENA LOGISTICA' else 'OTRO' end tramo_extravio,
+g.shipped_carrier_push_pull,
+g.shipped_meli,
+g.shipped_sgo,
+g.shipped_sbo,
+g.shipped_otro,
+(bpp_cashout_bonif + bpp_cashout_fixed) bpp_co,
+a.gmv_usd,
+(case when bpp_co >0 then 1 else 0 end) order_con_bpp
+from SCORING.fraud_main a																									
+left join SCORING.CAUSA_BPP b on a.ord_order_id = b.ord_order_id																									
+left join scoring.checkpoints c on a.shp_shipment_id = c.shp_id																									
+left join WHOWNER.BT_SHP_SHIPMENTS d on d.shp_shipment_id = a.shp_shipment_id	
+left join  WHOWNER.LK_SHP_SHIPPING_SERVICES f on f.shp_service_id = d.shp_service_id
+left join WHOWNER.LK_SHP_COMPANIES e  ON f.SHP_company_ID = e.shp_company_ID
+left join agencias z on z.shp_id = a.shp_shipment_id
+left join carrier_fm y on y.shp_id = a.shp_shipment_id
+left join WHOWNER.BT_SHP_LG_SHIPMENT_CHECKPOINTS v on v.shp_shipment_id = a.shp_shipment_id
+left join estados_checkpoints g on g.shp_id = a.shp_shipment_id
+where 1=1																									
+and shp_date_created_id  > (ADD_MONTHS((CURRENT_DATE - EXTRACT(DAY FROM CURRENT_DATE)+1), -3))
+and a.shp_shipping_mode_id = 'me2'																									
+and a.shp_picking_type_id not in ('self_service', 'default')																									
+and a.shp_picking_type_id is not null		
+and (case when b.causa_bpp in ('Extravio','Extravío Marketplace') then 1 else 0 end)=1
+and bpp_co>0
+-- and has_pf_extravio =1
+)WITH DATA PRIMARY INDEX (ord_order_id) ON COMMIT PRESERVE ROWS;
+
+
+
+drop table SCORING.pf_me_responsable_extravio_orders ;
+
+create table scoring.pf_me_responsable_extravio_orders as
+(select a.*
+from tipo_extravio a )
+with data primary index(ord_order_id);
